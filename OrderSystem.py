@@ -14,17 +14,13 @@ class OrderStatus(Enum):
 
 class OrderSystem:
     def __init__(self):
-        # сигнал, что кухня готова к работе (типа ресторан открывается)
         self.kitchen_ready = threading.Event()
 
-        # для управления доступом к плите (ограниченное количество мест)
         self.stove_condition = threading.Condition()
-        self.available_stoves = 2  # всего 2 конфорки :( Мы бедный ресторан
+        self.available_stoves = 2
 
-        # очередь заказов
         self.order_queue = queue.Queue(maxsize=10)
 
-        # статистика
         self.stats = {
             "total_orders": 0,
             "completed_orders": 0,
@@ -33,19 +29,15 @@ class OrderSystem:
         }
         self.stats_lock = threading.Lock()
 
-        # флаг работы системы
         self.system_running = False
 
-        # потоки
         self.producers = []
         self.consumers = []
         self.monitor_thread = None
 
-    # функция подготовки кухни, при открытии ресторана, кухня сначала готовится
     def kitchen_preparation(self):
         print("ПОВАР: Начинаю подготовку кухни...")
 
-        # имитация подготовки
         tasks = [
             "Проверяю оборудование",
             "Настраиваю температуру плит",
@@ -53,76 +45,165 @@ class OrderSystem:
             "Запускаю вытяжку"
         ]
 
-        # TODO: Выполняем подготовительные действия и сообщаем поварам и официантам "ОТКРЫВАЕМСЯ!!!"
+        for task in tasks:
+            print(f"Повар: {task}")
+            time.sleep(1)
 
-    # функция для генерации заказов (то есть наши официанты). Не забываем, что ресторан должен быть открыт!
+        print("Повар: ОТКРЫВАЕМСЯ!!!")
+        self.kitchen_ready.set()
+
     def order_producer(self, producer_id):
 
         menu_items = [
-            # придумайте пулл блюд, с которыми будут генерироваться заказы
+            "Паста",
+            "Борщ",
+            "Пельмеши",
+            "Блины",
+            "Рис с овощами"
         ]
 
         while self.system_running:
-            order = {
-                "order_id": random.randint(1000, 9999),
-                "customer_id": random.randint(1, 100),
-                "dish": random.choice(menu_items),
-                "complexity": random.randint(1, 5),  # сложность приготовления 1-5
-                "status": OrderStatus.PENDING.value,
-                "created_time": datetime.now(),
-                "producer_id": producer_id
-            }
+            if self.kitchen_ready.is_set():
+                order = {
+                    "order_id": random.randint(1000, 9999),
+                    "customer_id": random.randint(1, 100),
+                    "dish": random.choice(menu_items),
+                    "complexity": random.randint(1, 5),
+                    "status": OrderStatus.PENDING.value,
+                    "created_time": datetime.now(),
+                    "producer_id": producer_id
+                }
 
-            # TODO: Официант принимает заказ (мы его генерируем), отправляет поварам (не забываем про подсчет статистики)
+                if not self.order_queue.full():
+                    self.order_queue.put(order)
 
-            time.sleep(random.uniform(0.5, 2))
+                    with self.stats_lock:
+                        self.stats["total_orders"] += 1
+                    
+                    print(f"Официант {producer_id}: принял заказ #{order["order_id"]} {order["dish"]}")
+                
+                else:
+                    with self.stats_lock:
+                        self.stats["failed_orders"] += 1
 
-    # функция для обработки заказов (наши поварята) - повар спрашивает повара... Не забываем, что ресторан должен быть открыт!
+                    print(f"Официант {producer_id}: не смог принять заказ, очеред переполнена")
+
+                time.sleep(random.uniform(0.5, 2))
+
     def chef_consumer(self, chef_id):
+        while self.system_running:
+            if self.kitchen_ready.is_set():
+                order = self.order_queue.get()
 
-        # TODO: Повар забирает заказ, проверяет есть ли свободная конфорка (если нет, то ждет, естественно), готовит по
-        #  длительности в зависимости от сложности блюда cook_time = order["complexity"] * 0.5. Не забываем про статистику и статусы блюд!
+                with self.stove_condition:
+                    if self.available_stoves == 0:
+                        print(f"Повар {chef_id}: ждет свободную конфорку")      
+                        self.stove_condition.wait()
 
-        pass
+                    self.available_stoves -= 1
+                    print(f"Повар {chef_id}: занял свободную конфорку")
+                    print(f"Повар {chef_id}: начал готовить заказ #{order["order_id"]}")
 
-    # Функция для демон-потока
+                    order["status"] = OrderStatus.COOKING.value
+
+                cook_time = order["complexity"] * 0.5
+                time.sleep(cook_time)
+
+                order["status"] = OrderStatus.COMPLETED.value
+
+                with self.stove_condition:
+                    self.available_stoves += 1
+                    print(f"Повар {chef_id}: освободил конфорку")
+                    self.stove_condition.notify()
+
+                with self.stats_lock:
+                    self.stats["completed_orders"] += 1
+                    self.stats["cooking_time_total"] += cook_time
+
+                print(f"Повар {chef_id}: приготовил заказ #{order["order_id"]}")
+
+                order["status"] = OrderStatus.READY.value
+                self.order_queue.task_done()
+
     def monitoring(self):
+        while self.system_running:
+            if self.kitchen_ready:
+                with self.stats_lock:
+                    total_orders = self.stats["total_orders"]
+                    completed_orders = self.stats["completed_orders"]
+                    average_cooking_time = f"{self.stats["cooking_time_total"] / self.stats["completed_orders"]:.2f}" if self.stats["completed_orders"] > 0 else 0
+                    
+                in_queue = self.order_queue.qsize()
+                available_stoves = self.available_stoves
+                record_date = datetime.now().strftime("%d/%m, %H:%M:%S")
 
-        # TODO: Если рестик работает, каждые 5 секунд забираем статистику по параметрам:
-        #  "Всего заказов",
-        #  "Выполнено",
-        #  "В очереди",
-        #  "Среднее время приготовления блюд",
-        #  "Количество свободных конфорок" и записываем статистику в файл со временем когда эта статистика была записана
+                stats_record = {
+                    "Всего заказов": total_orders,
+                    "Выполнено": completed_orders,
+                    "В очереди": in_queue,
+                    "Среднее время приготовления блюд": average_cooking_time,
+                    "Количество свободных конфорок": available_stoves,
+                    "Дата": record_date
+                }
 
-        pass
+                with open("restaurant_record", "a", encoding="utf-8") as f:
+                    json.dump(stats_record, f, ensure_ascii=False)
+                    f.write("\n")
+                print("Статистика: сохранена запись статистики")
+
+            time.sleep(5)
+
 
     def start_system(self):
         print("ЗАПУСК СИСТЕМЫ РЕСТОРАНА...")
 
-        # TODO: Запускаем нашу подготовку ресторана в отдельном потоке, ждем завершения и запускаем официантов и
-        #  поваров, а также нашего демон-потока для статистики
+        self.system_running = True
 
+        preparation_thread = threading.Thread(target=self.kitchen_preparation)
+        preparation_thread.start()
+        preparation_thread.join()
+        
+        for i in range(4):
+            producer_thread = threading.Thread(target=self.order_producer, args=(i+1, ))
+            producer_thread.start()
+            self.producers.append(producer_thread)
+
+        for i in range(3):
+            consumer_thread = threading.Thread(target=self.chef_consumer, args=(i+1, ))
+            consumer_thread.start()
+            self.consumers.append(consumer_thread)
+
+        monitoring_thread = threading.Thread(target=self.monitoring, daemon=True)
+        monitoring_thread.start()
 
     def stop_system(self):
         print("ЗАКРЫТИЕ РЕСТОРАНА...")
 
-        # TODO: ждем когда все освободятся, выводим в консоль итоги рабочего дня:
-        #  "Всего принято заказов",
-        #  "Успешно выполнено",
-        #  "Среднее время приготовления
+        self.system_running = False
+        
+        time.sleep(10)
+
+        with self.stats_lock:
+            total_orders = self.stats["total_orders"]
+            completed_orders = self.stats["completed_orders"]
+            average_cooking_time = f"{self.stats["cooking_time_total"] / self.stats["completed_orders"]:.2f}" if self.stats["completed_orders"] > 0 else 0
+        
+        print(f"""
+ИТОГИ ДНЯ!
+Всего принято заказов: {total_orders}
+Успешно выполнено: {completed_orders}
+Среднее время приготовления: {average_cooking_time}
+              """)
 
         print("РЕСТОРАН ЗАКРЫТ!")
 
 
-# Запуск системы
 if __name__ == "__main__":
     restaurant = OrderSystem()
 
     try:
         restaurant.start_system()
 
-        # работаем 60 секунд
         time.sleep(60)
 
         restaurant.stop_system()
