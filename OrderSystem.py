@@ -183,7 +183,11 @@ class OrderSystem:
 
         self.system_running = False
         
-        time.sleep(10)
+        for producer in self.producers:
+            producer.join()
+
+        for consumer in self.consumers:
+            consumer.join()
 
         with self.stats_lock:
             total_orders = self.stats["total_orders"]
