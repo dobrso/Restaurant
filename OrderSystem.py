@@ -62,94 +62,93 @@ class OrderSystem:
             "Рис с овощами"
         ]
 
+        self.kitchen_ready.wait()
         while self.system_running:
-            if self.kitchen_ready.is_set():
-                order = {
-                    "order_id": random.randint(1000, 9999),
-                    "customer_id": random.randint(1, 100),
-                    "dish": random.choice(menu_items),
-                    "complexity": random.randint(1, 5),
-                    "status": OrderStatus.PENDING.value,
-                    "created_time": datetime.now(),
-                    "producer_id": producer_id
-                }
+            order = {
+                "order_id": random.randint(1000, 9999),
+                "customer_id": random.randint(1, 100),
+                "dish": random.choice(menu_items),
+                "complexity": random.randint(1, 5),
+                "status": OrderStatus.PENDING.value,
+                "created_time": datetime.now(),
+                "producer_id": producer_id
+            }
 
-                if not self.order_queue.full():
-                    self.order_queue.put(order)
+            if not self.order_queue.full():
+                self.order_queue.put(order)
 
-                    with self.stats_lock:
-                        self.stats["total_orders"] += 1
-                    
-                    print(f"Официант {producer_id}: принял заказ #{order["order_id"]} {order["dish"]}")
+                with self.stats_lock:
+                    self.stats["total_orders"] += 1
                 
-                else:
-                    with self.stats_lock:
-                        self.stats["failed_orders"] += 1
+                print(f"Официант {producer_id}: принял заказ #{order["order_id"]} {order["dish"]}")
+            else:
+                with self.stats_lock:
+                    self.stats["failed_orders"] += 1
 
-                    print(f"Официант {producer_id}: не смог принять заказ, очеред переполнена")
+                print(f"Официант {producer_id}: не смог принять заказ, очередь переполнена")
 
-                time.sleep(random.uniform(0.5, 2))
+            time.sleep(random.uniform(0.5, 2))
 
     def chef_consumer(self, chef_id):
+        self.kitchen_ready.wait()
         while self.system_running:
-            if self.kitchen_ready.is_set():
-                order = self.order_queue.get()
+            order = self.order_queue.get()
 
-                with self.stove_condition:
-                    if self.available_stoves == 0:
-                        print(f"Повар {chef_id}: ждет свободную конфорку")      
-                        self.stove_condition.wait()
+            with self.stove_condition:
+                if self.available_stoves == 0:
+                    print(f"Повар {chef_id}: ждет свободную конфорку")      
+                    self.stove_condition.wait()
 
-                    self.available_stoves -= 1
-                    print(f"Повар {chef_id}: занял свободную конфорку")
-                    print(f"Повар {chef_id}: начал готовить заказ #{order["order_id"]}")
+                self.available_stoves -= 1
+                print(f"Повар {chef_id}: занял свободную конфорку")
+                print(f"Повар {chef_id}: начал готовить заказ #{order["order_id"]}")
 
-                    order["status"] = OrderStatus.COOKING.value
+                order["status"] = OrderStatus.COOKING.value
 
-                cook_time = order["complexity"] * 0.5
-                time.sleep(cook_time)
+            cook_time = order["complexity"] * 0.5
+            time.sleep(cook_time)
 
-                order["status"] = OrderStatus.COMPLETED.value
+            order["status"] = OrderStatus.COMPLETED.value
 
-                with self.stove_condition:
-                    self.available_stoves += 1
-                    print(f"Повар {chef_id}: освободил конфорку")
-                    self.stove_condition.notify()
+            with self.stove_condition:
+                self.available_stoves += 1
+                print(f"Повар {chef_id}: освободил конфорку")
+                self.stove_condition.notify()
 
-                with self.stats_lock:
-                    self.stats["completed_orders"] += 1
-                    self.stats["cooking_time_total"] += cook_time
+            with self.stats_lock:
+                self.stats["completed_orders"] += 1
+                self.stats["cooking_time_total"] += cook_time
 
-                print(f"Повар {chef_id}: приготовил заказ #{order["order_id"]}")
+            print(f"Повар {chef_id}: приготовил заказ #{order["order_id"]}")
 
-                order["status"] = OrderStatus.READY.value
-                self.order_queue.task_done()
+            order["status"] = OrderStatus.READY.value
+            self.order_queue.task_done()
 
     def monitoring(self):
+        self.kitchen_ready.wait()
         while self.system_running:
-            if self.kitchen_ready:
-                with self.stats_lock:
-                    total_orders = self.stats["total_orders"]
-                    completed_orders = self.stats["completed_orders"]
-                    average_cooking_time = f"{self.stats["cooking_time_total"] / self.stats["completed_orders"]:.2f}" if self.stats["completed_orders"] > 0 else 0
-                    
-                in_queue = self.order_queue.qsize()
-                available_stoves = self.available_stoves
-                record_date = datetime.now().strftime("%d/%m, %H:%M:%S")
+            with self.stats_lock:
+                total_orders = self.stats["total_orders"]
+                completed_orders = self.stats["completed_orders"]
+                average_cooking_time = f"{self.stats["cooking_time_total"] / self.stats["completed_orders"]:.2f}" if self.stats["completed_orders"] > 0 else 0
+                
+            in_queue = self.order_queue.qsize()
+            available_stoves = self.available_stoves
+            record_date = datetime.now().strftime("%d/%m, %H:%M:%S")
 
-                stats_record = {
-                    "Всего заказов": total_orders,
-                    "Выполнено": completed_orders,
-                    "В очереди": in_queue,
-                    "Среднее время приготовления блюд": average_cooking_time,
-                    "Количество свободных конфорок": available_stoves,
-                    "Дата": record_date
-                }
+            stats_record = {
+                "Всего заказов": total_orders,
+                "Выполнено": completed_orders,
+                "В очереди": in_queue,
+                "Среднее время приготовления блюд": average_cooking_time,
+                "Количество свободных конфорок": available_stoves,
+                "Дата": record_date
+            }
 
-                with open("restaurant_record", "a", encoding="utf-8") as f:
-                    json.dump(stats_record, f, ensure_ascii=False)
-                    f.write("\n")
-                print("Статистика: сохранена запись статистики")
+            with open("restaurant_record", "a", encoding="utf-8") as f:
+                json.dump(stats_record, f, ensure_ascii=False)
+                f.write("\n")
+            print("Статистика: сохранена запись статистики")
 
             time.sleep(5)
 
