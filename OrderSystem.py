@@ -74,18 +74,21 @@ class OrderSystem:
                 "producer_id": producer_id
             }
 
-            if not self.order_queue.full():
-                self.order_queue.put(order)
-
-                with self.stats_lock:
-                    self.stats["total_orders"] += 1
-                
-                print(f"Официант {producer_id}: принял заказ #{order["order_id"]} {order["dish"]}")
-            else:
+            if self.order_queue.full():
                 with self.stats_lock:
                     self.stats["failed_orders"] += 1
 
                 print(f"Официант {producer_id}: не смог принять заказ, очередь переполнена")
+
+                time.sleep(random.uniform(0.5, 2))
+                continue
+
+            self.order_queue.put(order)
+
+            with self.stats_lock:
+                self.stats["total_orders"] += 1
+            
+            print(f"Официант {producer_id}: принял заказ #{order["order_id"]} {order["dish"]}")        
 
             time.sleep(random.uniform(0.5, 2))
 
